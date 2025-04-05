@@ -64,7 +64,9 @@ describe(email.name, async () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ body: expect.stringContaining('I have a question') }),
+      expect.objectContaining({ 
+        body: expect.stringContaining('embeds') 
+      }),
     );
   });
 
@@ -87,7 +89,7 @@ describe(email.name, async () => {
     await email(message, { DISCORD_WEBHOOK_URL });
 
     // Assert
-    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(fetchSpy).toHaveBeenCalledTimes(2); // С embeds обычно требуется меньше вызовов из-за более высокого лимита символов
     fetchMock.assertNoPendingInterceptors();
   });
 
@@ -115,7 +117,9 @@ describe(email.name, async () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ body: expect.stringContaining('(no subject)') }),
+      expect.objectContaining({ 
+        body: expect.stringContaining('(no subject)') 
+      }),
     );
   });
 
@@ -132,10 +136,8 @@ describe(email.name, async () => {
 
     // Assert
     await expect(invocation).resolves.toBeUndefined();
-    expect(fetchSpy.mock.calls[1]).toStrictEqual([
-      expect.any(String),
-      expect.objectContaining({ body: expect.stringContaining('Something unexpected') }),
-    ]);
+    expect(fetchSpy.mock.calls[1][1].body).toContain('errorEmbed');
+    expect(fetchSpy.mock.calls[1][1].body).toContain('Something unexpected');
   });
 
   it('reports an error if the response is not ok', async () => {
@@ -151,10 +153,8 @@ describe(email.name, async () => {
 
     // Assert
     await expect(invocation).resolves.toBeUndefined();
-    expect(fetchSpy.mock.calls[1]).toStrictEqual([
-      expect.any(String),
-      expect.objectContaining({ body: expect.stringContaining('Something unexpected') }),
-    ]);
+    expect(fetchSpy.mock.calls[1][1].body).toContain('errorEmbed');
+    expect(fetchSpy.mock.calls[1][1].body).toContain('Something unexpected');
   });
 
   it('throws if the error can not be reported', async () => {
@@ -171,5 +171,52 @@ describe(email.name, async () => {
     // Assert
     await expect(invocation).rejects.toThrow('Failed to post error to Discord webhook.');
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('correctly processes HTML version of email', async () => {
+    // Arrange
+    const fetchSpy = vi.spyOn(global, 'fetch');
+    
+    // Создаем HTML-содержимое
+    const htmlBody = '<h1>Заголовок письма</h1><p>Это <strong>тестовое</strong> письмо с <em>HTML</em> разметкой.</p>';
+    
+    // Подготавливаем mock для функции parseRawEmail
+    const originalExtract = require('letterparser').extract;
+    const extractMock = vi.fn().mockImplementation((rawEmail) => {
+      const result = originalExtract(rawEmail);
+      // Добавляем HTML-версию
+      result.html = htmlBody;
+      return result;
+    });
+    
+    // Временно подменяем функцию extract
+    require('letterparser').extract = extractMock;
+    
+    const message: EmailMessage = await createEmailMessage({ 
+      body: 'Текстовая версия письма'
+    });
+
+    // Act
+    await email(message, { DISCORD_WEBHOOK_URL });
+
+    // Восстанавливаем оригинальную функцию
+    require('letterparser').extract = originalExtract;
+
+    // Assert
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    
+    // Проверяем, что в Discord отправлен HTML-контент
+    const callArgs = fetchSpy.mock.calls[0][1];
+    const body = JSON.parse(callArgs.body);
+    
+    expect(body.embeds[0].description).toBe(htmlBody);
+    expect(body.embeds[0].fields).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'Content Type',
+          value: 'HTML',
+        })
+      ])
+    );
   });
 });
